@@ -64,7 +64,9 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
 
     @app.post("/token")
     def token(payload: dict) -> dict:
-        principal = authenticate(str(payload.get("username", "")), str(payload.get("password", "")))
+        username = str(payload.get("username", ""))[:256]
+        password = str(payload.get("password", ""))[:1024]
+        principal = authenticate(username, password)
         if principal is None:
             raise HTTPException(status_code=401, detail="invalid credentials")
         return issue_pair(principal)
