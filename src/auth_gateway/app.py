@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .jwt_util import InvalidToken, sign, verify
 from .keys import KeyStore
+from .throttle import Throttle
 from .users import authenticate
 
 ACCESS_TTL = 15 * 60
@@ -15,6 +16,7 @@ REFRESH_TTL = 12 * 3600
 def create_app(key_store: KeyStore | None = None) -> FastAPI:
     store = key_store or KeyStore()
     revoked_refresh: set[str] = set()
+    throttle = Throttle()
 
     app = FastAPI(title="Auth Gateway", version="0.1.0")
 
@@ -63,12 +65,22 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/token")
-    def token(payload: dict) -> dict:
+    def token(payload: dict, request: Request) -> dict:
         username = str(payload.get("username", ""))[:256]
         password = str(payload.get("password", ""))[:1024]
+        ip = request.client.host if request.client else ""
+        remaining = throttle.check(username, ip)
+        if remaining > 0:
+            raise HTTPException(
+                status_code=429,
+                detail=f"account locked; retry in {int(remaining) // 60 + 1} minute(s)",
+                headers={"Retry-After": str(int(remaining) + 1)},
+            )
         principal = authenticate(username, password)
         if principal is None:
+            throttle.failed(username, ip)
             raise HTTPException(status_code=401, detail="invalid credentials")
+        throttle.ok(username, ip)
         return issue_pair(principal)
 
     @app.post("/refresh")
