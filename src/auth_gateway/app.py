@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException, Request
 
+from . import audit
 from .jwt_util import InvalidToken, sign, verify
 from .keys import KeyStore
 from .throttle import Throttle
@@ -81,6 +82,8 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         ip = request.client.host if request.client else ""
         remaining = throttle.check(username, ip)
         if remaining > 0:
+            audit.record("account.locked", username, ip=ip,
+                         retry_after=int(remaining))
             raise HTTPException(
                 status_code=429,
                 detail=f"account locked; retry in {int(remaining) // 60 + 1} minute(s)",
@@ -89,6 +92,9 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         principal = authenticate(username, password)
         if principal is None:
             throttle.failed(username, ip)
+            if throttle.check(username, ip) > 0:
+                audit.record("account.locked", username, ip=ip)
+            audit.record("login.fail", username, ip=ip)
             raise HTTPException(status_code=401, detail="invalid credentials")
         throttle.ok(username, ip)
         return principal
@@ -110,6 +116,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             return True
         if totp_code or recovery:
             throttle.failed(username, request.client.host if request.client else "")
+            audit.record("mfa.fail", username)
             raise HTTPException(status_code=401, detail="invalid mfa code")
         return False
 
@@ -118,6 +125,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         principal = password_gate(payload, request)
         if not mfa_satisfied(payload, request, principal["sub"]):
             raise HTTPException(status_code=401, detail="mfa required")
+        audit.record("login.ok", principal["sub"])
         return issue_pair(principal)
 
     @app.post("/refresh")
@@ -131,10 +139,12 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="not a refresh token")
         jti = claims.get("jti", "")
         if jti in revoked_refresh:
+            audit.record("refresh.reuse", claims.get("sub", ""))
             raise HTTPException(status_code=401, detail="refresh token already used")
         if claims.get("iat", 0) < revoked_before.get(claims.get("sub", ""), 0):
             raise HTTPException(status_code=401, detail="refresh token revoked by administrator")
         revoked_refresh.add(jti)
+        audit.record("token.refreshed", claims.get("sub", ""))
         base = {"sub": claims.get("sub"), "tenant": claims.get("tenant"), "scopes": claims.get("scopes")}
         return issue_pair(base)
 
@@ -156,6 +166,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         if "admin" not in (claims.get("scopes") or []):
             raise HTTPException(status_code=403, detail="admin scope required")
         new_kid = store.rotate()
+        audit.record("key.rotated", claims.get("sub", ""), kid=new_kid)
         return {"active_kid": new_kid, "kept_versions": store.version_count()}
 
     @app.post("/mfa/enroll")
@@ -192,6 +203,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         record["totp_pending"] = None
         record["recovery_codes"] = generate_recovery_codes()
         record["recovery_used"] = set()
+        audit.record("mfa.enrolled", principal["sub"])
         return {"status": "enrolled", "recovery_codes": list(record["recovery_codes"])}
 
     @app.post("/admin/users/{name}/mfa-reset")
@@ -207,7 +219,15 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             USERS[name][key] = None
         USERS[name]["recovery_codes"] = []
         USERS[name]["recovery_used"] = set()
+        audit.record("mfa.reset", name, by=claims.get("sub", ""))
         return {"user": name, "mfa": "reset"}
+
+    @app.get("/admin/events")
+    def events(limit: int = 100, request: Request = None) -> dict:
+        claims = bearer_claims(request)
+        if "admin" not in (claims.get("scopes") or []):
+            raise HTTPException(status_code=403, detail="admin scope required")
+        return {"events": audit.recent(limit)}
 
     @app.post("/introspect")
     def introspect(payload: dict, request: Request) -> dict:
@@ -246,6 +266,8 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             revoked_access.add(jti)
         elif claims.get("typ") == "refresh":
             revoked_refresh.add(jti)
+        audit.record("token.revoked", claims.get("sub", ""),
+                     typ=claims.get("typ"))
         return {"revoked": True}
 
     @app.post("/admin/users/{name}/revoke-all")
@@ -260,6 +282,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown user")
         watermark = time.time()          # float: sub-second, fail-closed —
         revoked_before[name] = watermark # same-second tokens are revoked too
+        audit.record("user.revoked_all", name, by=claims.get("sub", ""))
         return {"user": name, "revoked_before": watermark}
 
     return app

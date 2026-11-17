@@ -11,9 +11,10 @@ def _reset_mfa_state():
     """USERS is a module-level in-memory store, so MFA enrollment leaks
     across tests (a fresh app still sees the old factor). Reset the MFA
     fields after every test; passwords/tenants/scopes stay as shipped."""
-    from auth_gateway import users
+    from auth_gateway import audit, users
 
     yield
+    audit.clear()
     for record in users.USERS.values():
         record["totp_secret"] = None
         record["totp_pending"] = None
