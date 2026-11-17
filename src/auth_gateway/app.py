@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException, Request
 from .jwt_util import InvalidToken, sign, verify
 from .keys import KeyStore
 from .throttle import Throttle
+from .totp import generate_recovery_codes, generate_secret, otpauth_url
+from .totp import verify as totp_verify
 from .users import USERS, authenticate
 
 ACCESS_TTL = 15 * 60
@@ -72,8 +74,8 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
     def healthz() -> dict:
         return {"status": "ok"}
 
-    @app.post("/token")
-    def token(payload: dict, request: Request) -> dict:
+    def password_gate(payload: dict, request: Request) -> dict:
+        """Shared credential+throttle check for /token and the MFA flow."""
         username = str(payload.get("username", ""))[:256]
         password = str(payload.get("password", ""))[:1024]
         ip = request.client.host if request.client else ""
@@ -89,6 +91,33 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             throttle.failed(username, ip)
             raise HTTPException(status_code=401, detail="invalid credentials")
         throttle.ok(username, ip)
+        return principal
+
+    def mfa_satisfied(payload: dict, request: Request, username: str) -> bool:
+        """True when the request carries a valid TOTP or unused recovery
+        code. A WRONG code counts toward lockout like any failed login."""
+        record = USERS.get(username) or {}
+        secret = record.get("totp_secret")
+        if not secret:
+            return True                                 # not enrolled
+        totp_code = str(payload.get("totp_code", "") or "").strip()
+        if totp_code and totp_verify(secret, totp_code):
+            return True
+        recovery = str(payload.get("recovery_code", "") or "").strip()
+        if recovery and recovery in record.get("recovery_codes", []) \
+                and recovery not in record["recovery_used"]:
+            record["recovery_used"].add(recovery)
+            return True
+        if totp_code or recovery:
+            throttle.failed(username, request.client.host if request.client else "")
+            raise HTTPException(status_code=401, detail="invalid mfa code")
+        return False
+
+    @app.post("/token")
+    def token(payload: dict, request: Request) -> dict:
+        principal = password_gate(payload, request)
+        if not mfa_satisfied(payload, request, principal["sub"]):
+            raise HTTPException(status_code=401, detail="mfa required")
         return issue_pair(principal)
 
     @app.post("/refresh")
@@ -128,6 +157,57 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="admin scope required")
         new_kid = store.rotate()
         return {"active_kid": new_kid, "kept_versions": store.version_count()}
+
+    @app.post("/mfa/enroll")
+    def mfa_enroll(payload: dict, request: Request) -> dict:
+        """Step 1 of Keycloak's Configure-OTP flow: valid credentials buy a
+        pending secret + otpauth:// URL; nothing is active yet."""
+        principal = password_gate(payload, request)
+        record = USERS[principal["sub"]]
+        secret = generate_secret()
+        record["totp_pending"] = secret
+        return {"secret": secret,
+                "otpauth_url": otpauth_url(secret, principal["sub"])}
+
+    @app.post("/mfa/confirm")
+    def mfa_confirm(payload: dict, request: Request) -> dict:
+        """Step 2: a code from the real authenticator activates MFA and
+        issues 10 one-time recovery codes exactly once. Re-confirming an
+        already-enrolled user verifies but never re-issues codes."""
+        principal = password_gate(payload, request)
+        record = USERS[principal["sub"]]
+        code = str(payload.get("code", "") or "")
+        if record.get("totp_secret"):
+            if not totp_verify(record["totp_secret"], code):
+                throttle.failed(principal["sub"], request.client.host if request.client else "")
+                raise HTTPException(status_code=401, detail="invalid mfa code")
+            return {"status": "already enrolled"}
+        pending = record.get("totp_pending")
+        if not pending:
+            raise HTTPException(status_code=409, detail="no pending enrollment")
+        if not totp_verify(pending, code):
+            throttle.failed(principal["sub"], request.client.host if request.client else "")
+            raise HTTPException(status_code=401, detail="invalid mfa code")
+        record["totp_secret"] = pending
+        record["totp_pending"] = None
+        record["recovery_codes"] = generate_recovery_codes()
+        record["recovery_used"] = set()
+        return {"status": "enrolled", "recovery_codes": list(record["recovery_codes"])}
+
+    @app.post("/admin/users/{name}/mfa-reset")
+    def mfa_reset(name: str, request: Request) -> dict:
+        """Keycloak's Reset-OTP required action: clears the factor; the
+        user logs in with password only and can re-enroll."""
+        claims = bearer_claims(request)
+        if "admin" not in (claims.get("scopes") or []):
+            raise HTTPException(status_code=403, detail="admin scope required")
+        if name not in USERS:
+            raise HTTPException(status_code=404, detail="unknown user")
+        for key in ("totp_secret", "totp_pending"):
+            USERS[name][key] = None
+        USERS[name]["recovery_codes"] = []
+        USERS[name]["recovery_used"] = set()
+        return {"user": name, "mfa": "reset"}
 
     @app.post("/introspect")
     def introspect(payload: dict, request: Request) -> dict:

@@ -22,9 +22,12 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 USERS = {
-    "alice": {"password_hash": hash_password("wonderland"), "tenant": "acme", "scopes": ["read", "write"]},
-    "admin": {"password_hash": hash_password("sekret"), "tenant": "root", "scopes": ["read", "write", "admin"]},
-    "bob": {"password_hash": hash_password("builder"), "tenant": "globex", "scopes": ["read"]},
+    "alice": {"password_hash": hash_password("wonderland"), "tenant": "acme", "scopes": ["read", "write"],
+              "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
+    "admin": {"password_hash": hash_password("sekret"), "tenant": "root", "scopes": ["read", "write", "admin"],
+              "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
+    "bob": {"password_hash": hash_password("builder"), "tenant": "globex", "scopes": ["read"],
+            "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
 }
 
 
