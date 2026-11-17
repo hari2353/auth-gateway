@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from .jwt_util import InvalidToken, sign, verify
 from .keys import KeyStore
 from .throttle import Throttle
-from .users import authenticate
+from .users import USERS, authenticate
 
 ACCESS_TTL = 15 * 60
 REFRESH_TTL = 12 * 3600
@@ -16,6 +16,8 @@ REFRESH_TTL = 12 * 3600
 def create_app(key_store: KeyStore | None = None) -> FastAPI:
     store = key_store or KeyStore()
     revoked_refresh: set[str] = set()
+    revoked_access: set[str] = set()
+    revoked_before: dict[str, float] = {}    # user -> iat watermark (global logout)
     throttle = Throttle()
 
     app = FastAPI(title="Auth Gateway", version="0.1.0")
@@ -29,7 +31,9 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         return response
 
     def issue_claims(base: dict, ttl: int, token_type: str) -> dict:
-        now = int(time.time())
+        # float iat (RFC 7519 NumericDate allows fractions): sub-second
+        # resolution is what makes the revoke-all watermark exact
+        now = time.time()
         claims = dict(base)
         claims.update(
             {
@@ -58,6 +62,10 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail=str(exc))
         if claims.get("typ") != expected_type:
             raise HTTPException(status_code=401, detail=f"expected {expected_type} token")
+        if claims.get("jti", "") in revoked_access:
+            raise HTTPException(status_code=401, detail="token revoked")
+        if claims.get("iat", 0) < revoked_before.get(claims.get("sub", ""), 0):
+            raise HTTPException(status_code=401, detail="token revoked by administrator")
         return claims
 
     @app.get("/healthz")
@@ -95,6 +103,8 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         jti = claims.get("jti", "")
         if jti in revoked_refresh:
             raise HTTPException(status_code=401, detail="refresh token already used")
+        if claims.get("iat", 0) < revoked_before.get(claims.get("sub", ""), 0):
+            raise HTTPException(status_code=401, detail="refresh token revoked by administrator")
         revoked_refresh.add(jti)
         base = {"sub": claims.get("sub"), "tenant": claims.get("tenant"), "scopes": claims.get("scopes")}
         return issue_pair(base)
@@ -118,6 +128,59 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="admin scope required")
         new_kid = store.rotate()
         return {"active_kid": new_kid, "kept_versions": store.version_count()}
+
+    @app.post("/introspect")
+    def introspect(payload: dict, request: Request) -> dict:
+        """RFC 7662: bad/expired/revoked tokens are {"active": false},
+        never an error. Caller must hold a valid token so anonymous
+        probes can't harvest token validity."""
+        bearer_claims(request)
+        raw = str(payload.get("token", ""))[:8192]
+        try:
+            claims = verify(raw, store.get)
+        except InvalidToken:
+            return {"active": False}
+        jti, sub, iat = claims.get("jti", ""), claims.get("sub", ""), claims.get("iat", 0)
+        if claims.get("typ") not in ("access", "refresh"):
+            return {"active": False}
+        if jti in revoked_access or jti in revoked_refresh:
+            return {"active": False}
+        if iat < revoked_before.get(sub, 0):
+            return {"active": False}
+        return {"active": True, "sub": sub, "tenant": claims.get("tenant"),
+                "scopes": claims.get("scopes"), "exp": claims.get("exp"),
+                "token_type": claims.get("typ")}
+
+    @app.post("/revoke")
+    def revoke(payload: dict, request: Request) -> dict:
+        """RFC 7009: always 200 — the response never leaks whether the
+        token existed or was already revoked."""
+        bearer_claims(request)
+        raw = str(payload.get("token", ""))[:8192]
+        try:
+            claims = verify(raw, store.get)
+        except InvalidToken:
+            return {"revoked": True}
+        jti = claims.get("jti", "")
+        if claims.get("typ") == "access":
+            revoked_access.add(jti)
+        elif claims.get("typ") == "refresh":
+            revoked_refresh.add(jti)
+        return {"revoked": True}
+
+    @app.post("/admin/users/{name}/revoke-all")
+    def revoke_all(name: str, request: Request) -> dict:
+        """Global logout (Keycloak/Zitadel Remote Logout): a revocation
+        watermark — every token this user got BEFORE this call stops
+        verifying; fresh logins work immediately."""
+        claims = bearer_claims(request)
+        if "admin" not in (claims.get("scopes") or []):
+            raise HTTPException(status_code=403, detail="admin scope required")
+        if name not in USERS:
+            raise HTTPException(status_code=404, detail="unknown user")
+        watermark = time.time()          # float: sub-second, fail-closed —
+        revoked_before[name] = watermark # same-second tokens are revoked too
+        return {"user": name, "revoked_before": watermark}
 
     return app
 
