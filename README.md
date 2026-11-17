@@ -21,11 +21,17 @@ if you deploy it.
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| POST | `/token` | credentials | returns access (15 min) + refresh (12 h) pair |
+| POST | `/token` | credentials (+ TOTP/recovery code once MFA is enrolled) | returns access (15 min) + refresh (12 h) pair; throttled, 429+Retry-After after 5 failures |
 | POST | `/refresh` | refresh token | rotates pair; old JTI revoked (reuse = 401) |
 | GET | `/me` | access token | echoes subject, tenant, scopes |
 | GET | `/v1/tenants/{tenant_id}/profile` | access token | **403 on tenant mismatch** |
+| POST | `/mfa/enroll` → `/mfa/confirm` | credentials | RFC 6238 TOTP: pending secret + otpauth:// URL, then confirm with a real code → active + 10 one-time recovery codes |
+| POST | `/introspect` | access token | RFC 7662: `{"active": bool, claims...}` — never an error for bad tokens |
+| POST | `/revoke` | access token | RFC 7009: always 200; access JTIs join a denylist enforced everywhere |
 | POST | `/admin/rotate` | admin scope | new signing key; old tokens stay valid within retention window |
+| POST | `/admin/users/{name}/revoke-all` | admin scope | global logout: iat watermark kills every pre-call token; fresh logins work immediately |
+| POST | `/admin/users/{name}/mfa-reset` | admin scope | clears the user's TOTP factor (Keycloak's Reset-OTP) |
+| GET | `/admin/events` | admin scope | bounded audit ring (last 200), newest first, `?limit` |
 
 ## Key rotation story
 
@@ -44,7 +50,9 @@ curl localhost:8000/me -H "Authorization: Bearer <access_token>"
 ## Tests
 
 ```bash
-pytest -q   # 15 tests: jwt roundtrip/tamper/expiry/kid, rotation windows, reuse detection, cross-tenant 403s, headers
+pytest -q   # 48 tests: jwt roundtrip/tamper/expiry/kid, rotation windows, reuse detection,
+            # cross-tenant 403s, headers, lockout/throttle, introspection/revocation/watermark,
+            # RFC 6238 TOTP vectors, recovery codes, audit events
 ```
 
 MIT

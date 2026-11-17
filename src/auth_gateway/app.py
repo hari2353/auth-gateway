@@ -23,7 +23,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
     revoked_before: dict[str, float] = {}    # user -> iat watermark (global logout)
     throttle = Throttle()
 
-    app = FastAPI(title="Auth Gateway", version="0.1.0")
+    app = FastAPI(title="Auth Gateway", version="0.2.0")
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
