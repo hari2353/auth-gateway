@@ -47,6 +47,13 @@ curl -X POST localhost:8000/token -d '{"username": "alice", "password": "wonderl
 curl localhost:8000/me -H "Authorization: Bearer <access_token>"
 ```
 
+## Capability scopes (Harvard Edge agentic-ai cross-pollination)
+
+`auth_gateway.capabilities` adds least-privilege scope checks on top of the
+existing JWT/throttle/MFA stack: `parse_scopes`, `has_scope` (with `*` and
+`prefix:*` wildcards), `require_scope`, `require_all`, `require_any`. A token
+can now carry `read:users` instead of an all-or-nothing role.
+
 ## Tests
 
 ```bash
