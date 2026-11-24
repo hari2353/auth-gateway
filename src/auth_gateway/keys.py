@@ -3,7 +3,9 @@ import time
 
 
 class KeyStore:
-    def __init__(self, initial_secret: str | None = None, max_versions: int = 3) -> None:
+    def __init__(
+        self, initial_secret: str | None = None, max_versions: int = 3
+    ) -> None:
         self._versions: dict[str, tuple[str, float]] = {}
         self._counter = 0
         self.max_versions = max_versions

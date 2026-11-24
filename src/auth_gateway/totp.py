@@ -6,6 +6,7 @@ is explicit stdlib and unit-tested against the RFC's own vectors.
 Verification is constant-time (hmac.compare_digest) and accepts a +/-1
 step (30s) of clock drift, like every production TOTP verifier.
 """
+
 import base64
 import hashlib
 import hmac
@@ -15,7 +16,7 @@ import time
 
 STEP = 30
 DIGITS = 6
-DRIFT = 1                # accepted clock drift, in steps
+DRIFT = 1  # accepted clock drift, in steps
 
 
 def generate_secret() -> str:
@@ -27,9 +28,11 @@ def otpauth_url(secret: str, username: str, issuer: str = "auth-gateway") -> str
     """The URL every authenticator app (Google, Aegis, 1Password) scans."""
     from urllib.parse import quote
 
-    return (f"otpauth://totp/{quote(issuer)}:{quote(username)}"
-            f"?secret={secret}&issuer={quote(issuer)}"
-            f"&algorithm=SHA1&digits={DIGITS}&period={STEP}")
+    return (
+        f"otpauth://totp/{quote(issuer)}:{quote(username)}"
+        f"?secret={secret}&issuer={quote(issuer)}"
+        f"&algorithm=SHA1&digits={DIGITS}&period={STEP}"
+    )
 
 
 def code_at(secret: str, counter: int) -> str:
@@ -37,8 +40,8 @@ def code_at(secret: str, counter: int) -> str:
     key = base32_decode(secret)
     digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
-    value = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF)
-    return f"{value % 10 ** DIGITS:0{DIGITS}d}"
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{value % 10**DIGITS:0{DIGITS}d}"
 
 
 def verify(secret: str, code: str, at: float | None = None) -> bool:

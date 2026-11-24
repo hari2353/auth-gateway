@@ -10,6 +10,7 @@ audit.py: a bounded ring buffer (last 200) of structured events; every
 security-relevant path records one; GET /admin/events reads it (admin
 scope), newest first, bounded with ?limit.
 """
+
 import pytest
 
 
@@ -58,12 +59,20 @@ def test_lockout_and_mfa_events_recorded(client):
     # mfa flow events
     r = c.post("/mfa/enroll", json={"username": "alice", "password": "wonderland"})
     secret = r.json()["secret"]
-    c.post("/mfa/confirm", json={"username": "alice", "password": "wonderland",
-                                 "code": code_at(secret, int(time.time() // 30))})
+    c.post(
+        "/mfa/confirm",
+        json={
+            "username": "alice",
+            "password": "wonderland",
+            "code": code_at(secret, int(time.time() // 30)),
+        },
+    )
     kinds = [e["event"] for e in c.get("/admin/events", headers=h).json()["events"]]
     assert "mfa.enrolled" in kinds
-    c.post("/token", json={"username": "alice", "password": "wonderland",
-                           "totp_code": "000000"})
+    c.post(
+        "/token",
+        json={"username": "alice", "password": "wonderland", "totp_code": "000000"},
+    )
     kinds = [e["event"] for e in c.get("/admin/events", headers=h).json()["events"]]
     assert "mfa.fail" in kinds
 
@@ -72,12 +81,20 @@ def test_token_lifecycle_events_recorded(client):
     c, h = admin_client()
     t = c.post("/token", json={"username": "alice", "password": "wonderland"}).json()
     c.post("/refresh", json={"refresh_token": t["refresh_token"]})
-    c.post("/refresh", json={"refresh_token": t["refresh_token"]})   # reuse
-    c.post("/revoke", json={"token": t["access_token"]},
-           headers={"Authorization": f"Bearer {t['access_token']}"})
+    c.post("/refresh", json={"refresh_token": t["refresh_token"]})  # reuse
+    c.post(
+        "/revoke",
+        json={"token": t["access_token"]},
+        headers={"Authorization": f"Bearer {t['access_token']}"},
+    )
     c.post("/admin/rotate", headers=h)
     kinds = [e["event"] for e in c.get("/admin/events", headers=h).json()["events"]]
-    for expected in ("token.refreshed", "refresh.reuse", "token.revoked", "key.rotated"):
+    for expected in (
+        "token.refreshed",
+        "refresh.reuse",
+        "token.revoked",
+        "key.rotated",
+    ):
         assert expected in kinds, expected
 
 
@@ -91,14 +108,19 @@ def test_revoke_all_event_recorded(client):
 
 def test_events_endpoint_is_admin_only_and_bounded(client):
     c, h = admin_client()
-    for i in range(230):                     # overflow the ring
+    for i in range(230):  # overflow the ring
         from auth_gateway.audit import record
+
         record("noise", user=f"u{i % 7}")
     assert c.get("/admin/events", headers=h).status_code == 200
     body = c.get("/admin/events?limit=50", headers=h).json()
     assert len(body["events"]) == 50
-    alice = c.post("/token", json={"username": "alice", "password": "wonderland"}).json()
-    r = c.get("/admin/events", headers={"Authorization": f"Bearer {alice['access_token']}"})
+    alice = c.post(
+        "/token", json={"username": "alice", "password": "wonderland"}
+    ).json()
+    r = c.get(
+        "/admin/events", headers={"Authorization": f"Bearer {alice['access_token']}"}
+    )
     assert r.status_code == 403
     assert c.get("/admin/events").status_code == 401
 

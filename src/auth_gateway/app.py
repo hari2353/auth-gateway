@@ -20,7 +20,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
     store = key_store or KeyStore()
     revoked_refresh: set[str] = set()
     revoked_access: set[str] = set()
-    revoked_before: dict[str, float] = {}    # user -> iat watermark (global logout)
+    revoked_before: dict[str, float] = {}  # user -> iat watermark (global logout)
     throttle = Throttle()
 
     app = FastAPI(title="Auth Gateway", version="0.2.0")
@@ -53,7 +53,12 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         kid, secret = store.active()
         access = sign(issue_claims(base, ACCESS_TTL, "access"), secret, kid)
         refresh = sign(issue_claims(base, REFRESH_TTL, "refresh"), secret, kid)
-        return {"access_token": access, "refresh_token": refresh, "token_type": "bearer", "expires_in": ACCESS_TTL}
+        return {
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": "bearer",
+            "expires_in": ACCESS_TTL,
+        }
 
     def bearer_claims(request: Request, expected_type: str = "access") -> dict:
         header = request.headers.get("authorization", "")
@@ -64,11 +69,15 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         except InvalidToken as exc:
             raise HTTPException(status_code=401, detail=str(exc))
         if claims.get("typ") != expected_type:
-            raise HTTPException(status_code=401, detail=f"expected {expected_type} token")
+            raise HTTPException(
+                status_code=401, detail=f"expected {expected_type} token"
+            )
         if claims.get("jti", "") in revoked_access:
             raise HTTPException(status_code=401, detail="token revoked")
         if claims.get("iat", 0) < revoked_before.get(claims.get("sub", ""), 0):
-            raise HTTPException(status_code=401, detail="token revoked by administrator")
+            raise HTTPException(
+                status_code=401, detail="token revoked by administrator"
+            )
         return claims
 
     @app.get("/healthz")
@@ -82,8 +91,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         ip = request.client.host if request.client else ""
         remaining = throttle.check(username, ip)
         if remaining > 0:
-            audit.record("account.locked", username, ip=ip,
-                         retry_after=int(remaining))
+            audit.record("account.locked", username, ip=ip, retry_after=int(remaining))
             raise HTTPException(
                 status_code=429,
                 detail=f"account locked; retry in {int(remaining) // 60 + 1} minute(s)",
@@ -105,13 +113,16 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         record = USERS.get(username) or {}
         secret = record.get("totp_secret")
         if not secret:
-            return True                                 # not enrolled
+            return True  # not enrolled
         totp_code = str(payload.get("totp_code", "") or "").strip()
         if totp_code and totp_verify(secret, totp_code):
             return True
         recovery = str(payload.get("recovery_code", "") or "").strip()
-        if recovery and recovery in record.get("recovery_codes", []) \
-                and recovery not in record["recovery_used"]:
+        if (
+            recovery
+            and recovery in record.get("recovery_codes", [])
+            and recovery not in record["recovery_used"]
+        ):
             record["recovery_used"].add(recovery)
             return True
         if totp_code or recovery:
@@ -142,16 +153,26 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             audit.record("refresh.reuse", claims.get("sub", ""))
             raise HTTPException(status_code=401, detail="refresh token already used")
         if claims.get("iat", 0) < revoked_before.get(claims.get("sub", ""), 0):
-            raise HTTPException(status_code=401, detail="refresh token revoked by administrator")
+            raise HTTPException(
+                status_code=401, detail="refresh token revoked by administrator"
+            )
         revoked_refresh.add(jti)
         audit.record("token.refreshed", claims.get("sub", ""))
-        base = {"sub": claims.get("sub"), "tenant": claims.get("tenant"), "scopes": claims.get("scopes")}
+        base = {
+            "sub": claims.get("sub"),
+            "tenant": claims.get("tenant"),
+            "scopes": claims.get("scopes"),
+        }
         return issue_pair(base)
 
     @app.get("/me")
     def me(request: Request) -> dict:
         claims = bearer_claims(request)
-        return {"sub": claims.get("sub"), "tenant": claims.get("tenant"), "scopes": claims.get("scopes")}
+        return {
+            "sub": claims.get("sub"),
+            "tenant": claims.get("tenant"),
+            "scopes": claims.get("scopes"),
+        }
 
     @app.get("/v1/tenants/{tenant_id}/profile")
     def tenant_profile(tenant_id: str, request: Request) -> dict:
@@ -177,8 +198,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         record = USERS[principal["sub"]]
         secret = generate_secret()
         record["totp_pending"] = secret
-        return {"secret": secret,
-                "otpauth_url": otpauth_url(secret, principal["sub"])}
+        return {"secret": secret, "otpauth_url": otpauth_url(secret, principal["sub"])}
 
     @app.post("/mfa/confirm")
     def mfa_confirm(payload: dict, request: Request) -> dict:
@@ -190,14 +210,18 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
         code = str(payload.get("code", "") or "")
         if record.get("totp_secret"):
             if not totp_verify(record["totp_secret"], code):
-                throttle.failed(principal["sub"], request.client.host if request.client else "")
+                throttle.failed(
+                    principal["sub"], request.client.host if request.client else ""
+                )
                 raise HTTPException(status_code=401, detail="invalid mfa code")
             return {"status": "already enrolled"}
         pending = record.get("totp_pending")
         if not pending:
             raise HTTPException(status_code=409, detail="no pending enrollment")
         if not totp_verify(pending, code):
-            throttle.failed(principal["sub"], request.client.host if request.client else "")
+            throttle.failed(
+                principal["sub"], request.client.host if request.client else ""
+            )
             raise HTTPException(status_code=401, detail="invalid mfa code")
         record["totp_secret"] = pending
         record["totp_pending"] = None
@@ -240,16 +264,25 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             claims = verify(raw, store.get)
         except InvalidToken:
             return {"active": False}
-        jti, sub, iat = claims.get("jti", ""), claims.get("sub", ""), claims.get("iat", 0)
+        jti, sub, iat = (
+            claims.get("jti", ""),
+            claims.get("sub", ""),
+            claims.get("iat", 0),
+        )
         if claims.get("typ") not in ("access", "refresh"):
             return {"active": False}
         if jti in revoked_access or jti in revoked_refresh:
             return {"active": False}
         if iat < revoked_before.get(sub, 0):
             return {"active": False}
-        return {"active": True, "sub": sub, "tenant": claims.get("tenant"),
-                "scopes": claims.get("scopes"), "exp": claims.get("exp"),
-                "token_type": claims.get("typ")}
+        return {
+            "active": True,
+            "sub": sub,
+            "tenant": claims.get("tenant"),
+            "scopes": claims.get("scopes"),
+            "exp": claims.get("exp"),
+            "token_type": claims.get("typ"),
+        }
 
     @app.post("/revoke")
     def revoke(payload: dict, request: Request) -> dict:
@@ -266,8 +299,7 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             revoked_access.add(jti)
         elif claims.get("typ") == "refresh":
             revoked_refresh.add(jti)
-        audit.record("token.revoked", claims.get("sub", ""),
-                     typ=claims.get("typ"))
+        audit.record("token.revoked", claims.get("sub", ""), typ=claims.get("typ"))
         return {"revoked": True}
 
     @app.post("/admin/users/{name}/revoke-all")
@@ -280,8 +312,8 @@ def create_app(key_store: KeyStore | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="admin scope required")
         if name not in USERS:
             raise HTTPException(status_code=404, detail="unknown user")
-        watermark = time.time()          # float: sub-second, fail-closed —
-        revoked_before[name] = watermark # same-second tokens are revoked too
+        watermark = time.time()  # float: sub-second, fail-closed —
+        revoked_before[name] = watermark  # same-second tokens are revoked too
         audit.record("user.revoked_all", name, by=claims.get("sub", ""))
         return {"user": name, "revoked_before": watermark}
 

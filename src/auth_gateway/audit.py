@@ -4,6 +4,7 @@ log every admin can read. This repo produced exactly the right events
 and wrote them nowhere. Bounded ring buffer (last MAX_EVENTS), newest
 first, one dict per event — token-frugal by construction.
 """
+
 import threading
 import time
 from collections import deque
@@ -20,15 +21,16 @@ class AuditLog:
         entry = {"event": event, "user": user, "at": time.time()}
         # detail is flattened (with reserved keys protected) — one level,
         # no nested digging for consumers
-        entry.update({k: v for k, v in detail.items()
-                      if k not in ("event", "user", "at")})
+        entry.update(
+            {k: v for k, v in detail.items() if k not in ("event", "user", "at")}
+        )
         with self._lock:
             self._events.append(entry)
 
     def recent(self, limit: int = 100) -> list[dict]:
         limit = max(1, min(int(limit), 500))
         with self._lock:
-            return list(self._events)[-limit:][::-1]     # newest first
+            return list(self._events)[-limit:][::-1]  # newest first
 
     def clear(self) -> None:
         with self._lock:

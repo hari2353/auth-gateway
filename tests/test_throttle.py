@@ -11,6 +11,7 @@ Pure stdlib: fixed-window counter per (username, client IP), lockout for
 off, and a bounded counter dict (no unbounded memory from fuzzed
 usernames).
 """
+
 import time
 
 import pytest
@@ -34,17 +35,17 @@ def test_burst_of_failures_locks_the_account(client, monkeypatch):
     for _ in range(5):
         r = client.post("/token", json=creds(p="wrong"))
         assert r.status_code == 401
-    r = client.post("/token", json=creds())            # correct creds now
+    r = client.post("/token", json=creds())  # correct creds now
     assert r.status_code == 429
     assert r.headers["retry-after"].isdigit()
     assert "locked" in r.json()["detail"].lower()
 
 
 def test_successful_login_resets_the_failure_counter(client):
-    for _ in range(4):                                 # under the threshold
+    for _ in range(4):  # under the threshold
         client.post("/token", json=creds(p="wrong"))
     assert client.post("/token", json=creds()).status_code == 200
-    for _ in range(4):                                 # counter was reset
+    for _ in range(4):  # counter was reset
         client.post("/token", json=creds(p="wrong"))
     assert client.post("/token", json=creds()).status_code == 200
 
@@ -62,7 +63,7 @@ def test_lockout_expires(client, monkeypatch):
     monkeypatch.setattr(time, "monotonic", lambda: t["now"])
     for _ in range(5):
         client.post("/token", json=creds(p="wrong"))
-    t["now"] = start + 901                             # past the 15-min window
+    t["now"] = start + 901  # past the 15-min window
     assert client.post("/token", json=creds()).status_code == 200
 
 
@@ -81,4 +82,4 @@ def test_rate_limit_headers_on_lockout(client):
         client.post("/token", json=creds(p="wrong"))
     r = client.post("/token", json=creds())
     assert r.status_code == 429
-    assert "no-store" in r.headers["cache-control"]   # 429s stay uncached
+    assert "no-store" in r.headers["cache-control"]  # 429s stay uncached

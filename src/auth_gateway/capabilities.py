@@ -28,7 +28,11 @@ def parse_scopes(value: str | Iterable[str] | None) -> frozenset[str]:
 def has_scope(granted: frozenset[str] | set[str] | str | None, required: str) -> bool:
     """A granted scope satisfies a requirement if it equals it or is a wildcard
     prefix: ``admin:*`` satisfies ``admin:keys`` and ``admin:users``."""
-    granted_set = parse_scopes(granted) if not isinstance(granted, (frozenset, set)) else frozenset(granted)
+    granted_set = (
+        parse_scopes(granted)
+        if not isinstance(granted, (frozenset, set))
+        else frozenset(granted)
+    )
     if required in granted_set or "*" in granted_set:
         return True
     for scope in granted_set:

@@ -15,19 +15,42 @@ def verify_password(password: str, stored: str) -> bool:
         scheme, salt_hex, digest_hex = stored.split("$")
         if scheme != "pbkdf2":
             return False
-        candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_hex), _ITERATIONS)
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), bytes.fromhex(salt_hex), _ITERATIONS
+        )
         return secrets.compare_digest(candidate.hex(), digest_hex)
     except (ValueError, TypeError):
         return False
 
 
 USERS = {
-    "alice": {"password_hash": hash_password("wonderland"), "tenant": "acme", "scopes": ["read", "write"],
-              "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
-    "admin": {"password_hash": hash_password("sekret"), "tenant": "root", "scopes": ["read", "write", "admin"],
-              "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
-    "bob": {"password_hash": hash_password("builder"), "tenant": "globex", "scopes": ["read"],
-            "totp_secret": None, "totp_pending": None, "recovery_codes": [], "recovery_used": set()},
+    "alice": {
+        "password_hash": hash_password("wonderland"),
+        "tenant": "acme",
+        "scopes": ["read", "write"],
+        "totp_secret": None,
+        "totp_pending": None,
+        "recovery_codes": [],
+        "recovery_used": set(),
+    },
+    "admin": {
+        "password_hash": hash_password("sekret"),
+        "tenant": "root",
+        "scopes": ["read", "write", "admin"],
+        "totp_secret": None,
+        "totp_pending": None,
+        "recovery_codes": [],
+        "recovery_used": set(),
+    },
+    "bob": {
+        "password_hash": hash_password("builder"),
+        "tenant": "globex",
+        "scopes": ["read"],
+        "totp_secret": None,
+        "totp_pending": None,
+        "recovery_codes": [],
+        "recovery_used": set(),
+    },
 }
 
 

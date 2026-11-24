@@ -13,6 +13,7 @@ requires totp_code or recovery_code after the password check (MFA
 state is never revealed to password-less callers). Admins get
 mfa-reset (Keycloak's "Reset OTP" required action).
 """
+
 import time
 
 import pytest
@@ -36,9 +37,12 @@ def test_verify_accepts_current_and_neighbor_steps():
     current = code_at(RFC_SECRET, now // 30)
     neighbor = code_at(RFC_SECRET, now // 30 - 1)
     assert verify(RFC_SECRET, current, at=now) is True
-    assert verify(RFC_SECRET, neighbor, at=now) is True       # clock drift
-    assert verify(RFC_SECRET, "000000", at=now) is False or code_at(RFC_SECRET, now // 30) == "000000"
-    assert verify(RFC_SECRET, "12345", at=now) is False       # malformed
+    assert verify(RFC_SECRET, neighbor, at=now) is True  # clock drift
+    assert (
+        verify(RFC_SECRET, "000000", at=now) is False
+        or code_at(RFC_SECRET, now // 30) == "000000"
+    )
+    assert verify(RFC_SECRET, "12345", at=now) is False  # malformed
 
 
 def test_verify_is_constant_time_compared(monkeypatch):
@@ -48,10 +52,14 @@ def test_verify_is_constant_time_compared(monkeypatch):
 
     seen = {}
     real = hmac_mod.compare_digest
-    monkeypatch.setattr(totp.hmac, "compare_digest",
-                        lambda a, b: seen.setdefault("cmp", True) and real(a, b))
-    totp.verify(RFC_SECRET, totp.code_at(RFC_SECRET, 1_700_000_000 // 30),
-                at=1_700_000_000)
+    monkeypatch.setattr(
+        totp.hmac,
+        "compare_digest",
+        lambda a, b: seen.setdefault("cmp", True) and real(a, b),
+    )
+    totp.verify(
+        RFC_SECRET, totp.code_at(RFC_SECRET, 1_700_000_000 // 30), at=1_700_000_000
+    )
     assert seen.get("cmp") is True
 
 
@@ -59,7 +67,7 @@ def test_secret_and_codes_shape():
     from auth_gateway.totp import generate_recovery_codes, generate_secret
 
     s = generate_secret()
-    assert len(s) == 32 and s.isupper()          # 160 bits, base32
+    assert len(s) == 32 and s.isupper()  # 160 bits, base32
     codes = generate_recovery_codes()
     assert len(codes) == 10 and len(set(codes)) == 10
     assert all(len(c) == 9 and "-" in c for c in codes)
@@ -95,7 +103,10 @@ def test_enroll_returns_secret_and_otpauth_url(client):
     body = r.json()
     assert body["secret"].isupper() and len(body["secret"]) == 32
     assert body["otpauth_url"].startswith("otpauth://totp/")
-    assert "secret=" in body["otpauth_url"] and "issuer=auth-gateway" in body["otpauth_url"]
+    assert (
+        "secret=" in body["otpauth_url"]
+        and "issuer=auth-gateway" in body["otpauth_url"]
+    )
 
 
 def test_confirm_activates_mfa_and_issues_recovery_codes_once(client):
@@ -107,8 +118,12 @@ def test_confirm_activates_mfa_and_issues_recovery_codes_once(client):
     from auth_gateway.users import USERS
 
     secret = USERS["alice"]["totp_secret"]
-    again = client.post("/mfa/confirm", json={**CREDS, "code": code_at(secret, int(time.time() // 30))})
-    assert "recovery_codes" not in again.json() or not again.json().get("recovery_codes")
+    again = client.post(
+        "/mfa/confirm", json={**CREDS, "code": code_at(secret, int(time.time() // 30))}
+    )
+    assert "recovery_codes" not in again.json() or not again.json().get(
+        "recovery_codes"
+    )
 
 
 def test_token_requires_mfa_once_enrolled(client):
@@ -153,23 +168,33 @@ def test_admin_mfa_reset(client):
     from auth_gateway.totp import code_at
 
     _enroll_and_confirm(client)
-    admin = client.post("/token", json={"username": "admin", "password": "sekret"}).json()
-    r = client.post("/admin/users/alice/mfa-reset",
-                    headers={"Authorization": f"Bearer {admin['access_token']}"})
+    admin = client.post(
+        "/token", json={"username": "admin", "password": "sekret"}
+    ).json()
+    r = client.post(
+        "/admin/users/alice/mfa-reset",
+        headers={"Authorization": f"Bearer {admin['access_token']}"},
+    )
     assert r.status_code == 200
-    assert client.post("/token", json=CREDS).status_code == 200   # no code needed
+    assert client.post("/token", json=CREDS).status_code == 200  # no code needed
 
 
 def test_admin_mfa_reset_requires_admin(client):
     _enroll_and_confirm(client)
     alice = client.post("/token", json=CREDS)  # 401: mfa required, no token
     assert alice.status_code == 401
-    admin = client.post("/token", json={"username": "admin", "password": "sekret"}).json()
-    r = client.post("/admin/users/alice/mfa-reset",
-                    headers={"Authorization": f"Bearer {admin['access_token']}"})
+    admin = client.post(
+        "/token", json={"username": "admin", "password": "sekret"}
+    ).json()
+    r = client.post(
+        "/admin/users/alice/mfa-reset",
+        headers={"Authorization": f"Bearer {admin['access_token']}"},
+    )
     assert r.status_code == 200
     # a non-admin bearer can't reset
     bob = client.post("/token", json={"username": "bob", "password": "builder"}).json()
-    r2 = client.post("/admin/users/bob/mfa-reset",
-                     headers={"Authorization": f"Bearer {bob['access_token']}"})
+    r2 = client.post(
+        "/admin/users/bob/mfa-reset",
+        headers={"Authorization": f"Bearer {bob['access_token']}"},
+    )
     assert r2.status_code == 403

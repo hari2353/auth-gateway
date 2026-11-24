@@ -40,7 +40,13 @@ def verify(token: str, key_lookup) -> dict:
     secret = key_lookup(header.get("kid"))
     if secret is None:
         raise InvalidToken("unknown kid")
-    expected = _b64u_encode(hmac.new(secret.encode(), f"{encoded_header}.{encoded_payload}".encode(), hashlib.sha256).digest())
+    expected = _b64u_encode(
+        hmac.new(
+            secret.encode(),
+            f"{encoded_header}.{encoded_payload}".encode(),
+            hashlib.sha256,
+        ).digest()
+    )
     if not hmac.compare_digest(expected, signature):
         raise InvalidToken("bad signature")
     try:

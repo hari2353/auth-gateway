@@ -8,6 +8,7 @@ LOCKOUT_SECONDS after LOCKOUT_AFTER consecutive failures; a successful
 login resets the counter. Counters are bounded so fuzzed usernames can't
 grow memory without limit.
 """
+
 import time
 from collections import defaultdict
 
@@ -17,9 +18,12 @@ MAX_TRACKED = 10_000
 
 
 class Throttle:
-    def __init__(self, lockout_after: int = LOCKOUT_AFTER,
-                 lockout_seconds: float = LOCKOUT_SECONDS,
-                 max_tracked: int = MAX_TRACKED) -> None:
+    def __init__(
+        self,
+        lockout_after: int = LOCKOUT_AFTER,
+        lockout_seconds: float = LOCKOUT_SECONDS,
+        max_tracked: int = MAX_TRACKED,
+    ) -> None:
         self._failures: dict[tuple[str, str], int] = defaultdict(int)
         self._locked_until: dict[tuple[str, str], float] = {}
         self.lockout_after = lockout_after
