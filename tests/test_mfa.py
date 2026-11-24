@@ -165,7 +165,6 @@ def test_mfa_enroll_requires_valid_credentials(client):
 
 
 def test_admin_mfa_reset(client):
-    from auth_gateway.totp import code_at
 
     _enroll_and_confirm(client)
     admin = client.post(

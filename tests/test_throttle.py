@@ -68,7 +68,6 @@ def test_lockout_expires(client, monkeypatch):
 
 
 def test_counter_store_is_bounded(client):
-    from auth_gateway.app import create_app
     from auth_gateway.throttle import Throttle
 
     th = Throttle(max_tracked=100)
